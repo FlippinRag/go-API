@@ -24,6 +24,8 @@ func main() {
 	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/register", registerHandler)
 	http.HandleFunc("/securityAnswer", securityAnswerHandler)
+	http.HandleFunc("/checkSecurityAnswer", checkSecurityAnswerHandler)
+	http.HandleFunc("/resetPassword", resetPasswordHandler)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
@@ -43,7 +45,6 @@ func validateUserInput(playerName, password string) string {
 	if len(playerName) < 3 || len(password) < 3 {
 		return "Username or Password is less than 3 characters. Too short, try again!"
 	}
-
 	return ""
 }
 
@@ -227,4 +228,86 @@ func securityAnswerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fmt.Fprint(w, "Security answer stored successfully!")
+}
+
+func checkSecurityAnswerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerID, err := strconv.Atoi(r.URL.Query().Get("playerID"))
+	if err != nil {
+		http.Error(w, "Invalid player ID", http.StatusBadRequest)
+		return
+	}
+
+	securityAnswer := r.URL.Query().Get("securityAnswer")
+
+	matches, err := doesSecurityAnswerMatch(playerID, securityAnswer)
+	if err != nil {
+		http.Error(w, "An error occurred while checking the security answer.", http.StatusInternalServerError)
+		return
+	}
+
+	if !matches {
+		http.Error(w, "Security answer does not match", http.StatusNotFound)
+		return
+	}
+
+	fmt.Fprint(w, "true")
+}
+
+func doesSecurityAnswerMatch(playerID int, securityAnswer string) (bool, error) {
+	var storedAnswer string
+	err := db.QueryRow("SELECT securityAnswers FROM players WHERE playerID = ?", playerID).Scan(&storedAnswer)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil // Player does not exist
+		}
+		return false, err
+	}
+	return securityAnswer == storedAnswer, nil // Check if the security answer matches
+}
+
+func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerID, err := strconv.Atoi(r.URL.Query().Get("playerID"))
+	if err != nil {
+		http.Error(w, "Invalid player ID", http.StatusBadRequest)
+		return
+	}
+
+	newPassword := r.URL.Query().Get("newPassword")
+
+	success, err := resetPassword(playerID, newPassword)
+	if err != nil {
+		http.Error(w, "An error occurred while resetting the password.", http.StatusInternalServerError)
+		return
+	}
+
+	if !success {
+		http.Error(w, "Could not reset password", http.StatusNotFound)
+		return
+	}
+
+	fmt.Fprint(w, "true")
+}
+
+func resetPassword(playerID int, newPassword string) (bool, error) {
+	res, err := db.Exec("UPDATE players SET playerPassword = ? WHERE playerID = ?", newPassword, playerID)
+	if err != nil {
+		return false, err
+	}
+
+	rowsAffected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rowsAffected > 0, nil // If at least one row is affected, the password reset was successful.
 }
