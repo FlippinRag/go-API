@@ -27,15 +27,27 @@ func main() {
 		}
 	}(db)
 
+	pokemon, err := getPlayerPokemonByID(1)
+	if err != nil {
+		log.Fatalf("An error occurred: %v", err)
+	}
+	if pokemon == nil {
+		log.Println("No Pokemon found with the provided ID.")
+		return
+	}
+	log.Printf("Pokemon: %+v\n", pokemon)
+
 	http.HandleFunc("/getPlayerID", getPlayerIDHandler)
 	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/register", registerHandler)
 	http.HandleFunc("/securityAnswer", securityAnswerHandler)
 	http.HandleFunc("/checkSecurityAnswer", checkSecurityAnswerHandler)
 	http.HandleFunc("/resetPassword", resetPasswordHandler)
-	http.HandleFunc("/getPokemon", getPokemonByIDHandler)
+	http.HandleFunc("/getPlayerPokemon", getPlayerPokemonByIDHandler)
+	http.HandleFunc("/getEnemyPokemon", getEnemyPokemonByIDHandler)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
+
 }
 
 func validateUserInput(playerName, password string) string {
@@ -320,7 +332,37 @@ func resetPassword(playerID int, newPassword string) (bool, error) {
 	return rowsAffected > 0, nil // If at least one row is affected, the password reset was successful.
 }
 
-func getPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
+type Pokemon struct {
+	PlayerPokemonID   int    `json:"playerPokemonID"`
+	PlayerID          int    `json:"playerID"`
+	PlayerPokemonName string `json:"playerPokemonName"`
+	PlayerXP          int    `json:"playerXP"`
+	PlayerLevel       int    `json:"playerLevel"`
+	PlayerHP          int    `json:"playerHP"`
+}
+
+type EnemyPokemon struct {
+	EnemyPokemonID   int    `json:"enemyPokemonID"`
+	EnemyPokemonName string `json:"enemyPokemonName"`
+	EnemyLevel       int    `json:"enemyLevel"`
+	EnemyHp          int    `json:"enemyHp"`
+	EnemySpecialMove string `json:"enemySpecialMove"`
+}
+
+func getPlayerPokemonByID(playerPokemonID int) (*Pokemon, error) {
+	var pokemon Pokemon
+	err := db.QueryRow("SELECT playerPokemonID, playerID, playerPokemonName, playerXP, playerLevel, playerHP FROM playerPokemons WHERE playerPokemonID = ?", playerPokemonID).
+		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerID, &pokemon.PlayerPokemonName, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &pokemon, nil
+}
+
+func getPlayerPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
@@ -328,11 +370,11 @@ func getPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
 
 	pokemonID, err := strconv.Atoi(r.URL.Query().Get("id"))
 	if err != nil {
-		http.Error(w, "Invalid Pokemon ID", http.StatusBadRequest)
+		http.Error(w, "Invalid Player Pokemon ID", http.StatusBadRequest)
 		return
 	}
 
-	pokemon, err := getPokemonByID(pokemonID)
+	pokemon, err := getPlayerPokemonByID(pokemonID)
 	if err != nil {
 		http.Error(w, "Could not retrieve Pokemon", http.StatusInternalServerError)
 		return
@@ -346,24 +388,41 @@ func getPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pokemon)
 }
-
-type Pokemon struct {
-	PokemonID   int    `json:"pokemonID"`
-	PlayerID    int    `json:"playerID"`
-	PokemonName string `json:"pokemonName"`
-	XP          int    `json:"xp"`
-	Level       int    `json:"level"`
-	HP          int    `json:"hp"`
-}
-
-func getPokemonByID(pokemonID int) (*Pokemon, error) {
-	var pokemon Pokemon
-	err := db.QueryRow("SELECT pokemonID, playerID, pokemonName, xp, level, hp FROM pokemon WHERE pokemonID = ?", pokemonID).Scan(&pokemon.PokemonID, &pokemon.PlayerID, &pokemon.PokemonName, &pokemon.XP, &pokemon.Level, &pokemon.HP)
+func getEnemyPokemonByID(enemyPokemonID int) (*EnemyPokemon, error) {
+	var enemyPokemon EnemyPokemon
+	err := db.QueryRow("SELECT enemyPokemonID, enemyPokemonName, enemyLevel, enemyHp, enemySpecialMove FROM enemypokemons WHERE enemyPokemonID = ?", enemyPokemonID).Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyLevel, &enemyPokemon.EnemyHp, &enemyPokemon.EnemySpecialMove)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return &pokemon, nil
+	return &enemyPokemon, nil
+}
+
+func getEnemyPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	enemyPokemonID, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if err != nil {
+		http.Error(w, "Invalid Enemy Pokemon ID", http.StatusBadRequest)
+		return
+	}
+
+	enemyPokemon, err := getEnemyPokemonByID(enemyPokemonID)
+	if err != nil {
+		http.Error(w, "Could not retrieve Enemy Pokemon", http.StatusInternalServerError)
+		return
+	}
+
+	if enemyPokemon == nil {
+		http.Error(w, "Cannot find Enemy Pokemon", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(enemyPokemon)
 }
