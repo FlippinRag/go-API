@@ -27,15 +27,15 @@ func main() {
 		}
 	}(db)
 
-	pokemon, err := getPlayerPokemonByID(1)
+	enemyPokemon, err := getEnemyPokemonByID(1)
 	if err != nil {
 		log.Fatalf("An error occurred: %v", err)
 	}
-	if pokemon == nil {
-		log.Println("No Pokemon found with the provided ID.")
-		return
+	if enemyPokemon == nil {
+		log.Println("No enemy Pokemon found with the provided ID.")
+	} else {
+		log.Printf("Enemy Pokemon: %+v\n", enemyPokemon)
 	}
-	log.Printf("Pokemon: %+v\n", pokemon)
 
 	http.HandleFunc("/getPlayerID", getPlayerIDHandler)
 	http.HandleFunc("/login", loginHandler)
@@ -51,15 +51,8 @@ func main() {
 }
 
 func validateUserInput(playerName, password string) string {
-	if playerName == "" && password == "" {
-		return "now y you dont put either?!?"
-	}
-
 	if playerName == "" {
-		return "y you no put Username??!"
-	}
-	if password == "" {
-		return "y you no put Password??!"
+		return "why you not put Username??!"
 	}
 
 	if len(playerName) < 3 || len(password) < 3 {
@@ -78,47 +71,6 @@ func isValidUser(playerName, password string) (string, int, error) {
 		return "false", 0, err
 	}
 	return "true", id, nil
-}
-
-func loginHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	playerName := r.URL.Query().Get("username")
-	password := r.URL.Query().Get("password")
-
-	validationError := validateUserInput(playerName, password)
-	if validationError != "" {
-		fmt.Fprint(w, validationError)
-		return
-	}
-
-	valid, _, err := isValidUser(playerName, password)
-	if err != nil {
-		fmt.Fprint(w, "An error occurred while checking the user.")
-		return
-	}
-
-	if valid == "false" {
-		fmt.Fprint(w, "yo tings are wrong")
-		return
-	}
-
-	fmt.Fprint(w, "true")
-}
-
-func getPlayerID(playerName string) (int, error) {
-	var id int
-	err := db.QueryRow("SELECT playerID FROM players WHERE playerName = ?", playerName).Scan(&id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	return id, nil
 }
 
 func getPlayerIDHandler(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +100,64 @@ func getPlayerIDHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, playerID)
 }
 
+func getPlayerID(playerName string) (int, error) {
+	var id int
+	err := db.QueryRow("SELECT playerID FROM players WHERE playerName = ?", playerName).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return id, nil
+}
+
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerName := r.URL.Query().Get("username")
+	password := r.URL.Query().Get("password")
+
+	validationError := validateUserInput(playerName, password)
+	if validationError != "" {
+		fmt.Fprint(w, validationError)
+		return
+	}
+
+	valid, _, err := isValidUser(playerName, password)
+	if err != nil {
+		fmt.Fprint(w, "An error occurred while checking the user.")
+		return
+	}
+
+	if valid == "false" {
+		fmt.Fprint(w, "Credentials are incorrect!")
+		return
+	}
+
+	fmt.Fprint(w, "true")
+}
+
+func isPlayerNameUnique(playerName string) (bool, error) {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM players WHERE playerName = ?", playerName).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func insertPlayer(playerName, password string) (bool, error) {
+	_, err := db.Exec("INSERT INTO players (playerName, playerPassword) VALUES (?, ?)", playerName, password)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -159,57 +169,54 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	validationError := validateUserInput(playerName, password)
 	if validationError != "" {
-		fmt.Fprint(w, validationError)
+		http.Error(w, validationError, http.StatusBadRequest)
 		return
 	}
 
 	unique, err := isPlayerNameUnique(playerName)
 	if err != nil {
-		fmt.Fprint(w, "Could not check playerName uniqueness")
+		http.Error(w, "Could not check playerName uniqueness", http.StatusInternalServerError)
 		return
 	}
 
 	if !unique {
-		fmt.Fprint(w, "PlayerName already exists!")
+		http.Error(w, "PlayerName already exists!", http.StatusConflict)
 		return
 	}
 
 	success, err := insertPlayer(playerName, password)
 	if err != nil || !success {
-		fmt.Fprint(w, "Couldn't insert you into the database!")
+		http.Error(w, "Couldn't insert you into the database!", http.StatusInternalServerError)
 		return
 	}
 	fmt.Fprint(w, "true")
 }
 
-func isPlayerNameUnique(playerName string) (bool, error) {
-	var id int
-	err := db.QueryRow("SELECT playerID FROM players WHERE playerName = ?", playerName).Scan(&id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return true, nil // Player name is unique
-		}
-		return false, err
-	}
-	return false, nil // Player name already exists, not unique
-}
-
-func insertPlayer(playerName, password string) (bool, error) {
-	res, err := db.Exec("INSERT INTO players (playerName, playerPassword) VALUES (?, ?)", playerName, password)
-	if err != nil {
-		return false, err
+func securityAnswerHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
 	}
 
-	rowsAffected, err := res.RowsAffected()
+	playerID, err := strconv.Atoi(r.FormValue("playerID"))
 	if err != nil {
-		return false, err
+		http.Error(w, "Invalid playerID", http.StatusBadRequest)
+		return
 	}
 
-	return rowsAffected > 0, nil // If at least one row is affected, the insertion was successful.
+	securityAnswer := r.FormValue("securityAnswer")
+
+	err = insertSecurityAnswer(playerID, securityAnswer)
+	if err != nil {
+		http.Error(w, "Couldn't insert security answer into the database!", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprint(w, "Security answer stored successfully!")
 }
 
 func insertSecurityAnswer(playerID int, securityAnswer string) error {
-	res, err := db.Exec("UPDATE players SET securityAnswers = ? WHERE playerID = ?", securityAnswer, playerID)
+	res, err := db.Exec("INSERT INTO playersecurity (playerID, securityAnswers) VALUES (?, ?) ON DUPLICATE KEY UPDATE securityAnswers = VALUES(securityAnswers)", playerID, securityAnswer)
 	if err != nil {
 		return err
 	}
@@ -226,28 +233,6 @@ func insertSecurityAnswer(playerID int, securityAnswer string) error {
 	}
 
 	return nil
-}
-
-func securityAnswerHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
-		return
-	}
-
-	playerID, err := strconv.Atoi(r.FormValue("playerID"))
-	if err != nil {
-		http.Error(w, "Invalid playerID", http.StatusBadRequest)
-		return
-	}
-	securityAnswer := r.FormValue("securityAnswer")
-
-	err = insertSecurityAnswer(playerID, securityAnswer)
-	if err != nil {
-		http.Error(w, "Couldn't insert security answer into the database!", http.StatusInternalServerError)
-		return
-	}
-
-	fmt.Fprint(w, "Security answer stored successfully!")
 }
 
 func checkSecurityAnswerHandler(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +265,7 @@ func checkSecurityAnswerHandler(w http.ResponseWriter, r *http.Request) {
 
 func doesSecurityAnswerMatch(playerID int, securityAnswer string) (bool, error) {
 	var storedAnswer string
-	err := db.QueryRow("SELECT securityAnswers FROM players WHERE playerID = ?", playerID).Scan(&storedAnswer)
+	err := db.QueryRow("SELECT securityAnswers FROM playersecurity WHERE playerID = ?", playerID).Scan(&storedAnswer)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil // Player does not exist
@@ -341,17 +326,9 @@ type Pokemon struct {
 	PlayerHP          int    `json:"playerHP"`
 }
 
-type EnemyPokemon struct {
-	EnemyPokemonID   int    `json:"enemyPokemonID"`
-	EnemyPokemonName string `json:"enemyPokemonName"`
-	EnemyLevel       int    `json:"enemyLevel"`
-	EnemyHp          int    `json:"enemyHp"`
-	EnemySpecialMove string `json:"enemySpecialMove"`
-}
-
 func getPlayerPokemonByID(playerPokemonID int) (*Pokemon, error) {
 	var pokemon Pokemon
-	err := db.QueryRow("SELECT playerPokemonID, playerID, playerPokemonName, playerXP, playerLevel, playerHP FROM playerPokemons WHERE playerPokemonID = ?", playerPokemonID).
+	err := db.QueryRow("SELECT pp.playerPokemonID, pp.playerID, pp.playerPokemonName, ps.playerXP, ps.playerLevel, ps.playerHP FROM playerpokemons pp INNER JOIN playerpokemonstats ps ON pp.playerPokemonID = ps.playerPokemonID WHERE pp.playerPokemonID = ?", playerPokemonID).
 		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerID, &pokemon.PlayerPokemonName, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -388,9 +365,19 @@ func getPlayerPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pokemon)
 }
+
+type EnemyPokemon struct {
+	EnemyPokemonID   int    `json:"enemyPokemonID"`
+	EnemyPokemonName string `json:"enemyPokemonName"`
+	EnemyLevel       int    `json:"enemyLevel"`
+	EnemyHp          int    `json:"enemyHp"`
+	EnemySpecialMove string `json:"enemySpecialMove"`
+}
+
 func getEnemyPokemonByID(enemyPokemonID int) (*EnemyPokemon, error) {
 	var enemyPokemon EnemyPokemon
-	err := db.QueryRow("SELECT enemyPokemonID, enemyPokemonName, enemyLevel, enemyHp, enemySpecialMove FROM enemypokemons WHERE enemyPokemonID = ?", enemyPokemonID).Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyLevel, &enemyPokemon.EnemyHp, &enemyPokemon.EnemySpecialMove)
+	err := db.QueryRow("SELECT ep.enemyPokemonID, ep.enemyPokemonName, eps.enemyLevel, eps.enemyHp, eps.enemySpecialMove FROM enemypokemons ep INNER JOIN enemypokemonstats eps ON ep.enemyPokemonID = eps.enemyPokemonID WHERE ep.enemyPokemonID = ?", enemyPokemonID).
+		Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyLevel, &enemyPokemon.EnemyHp, &enemyPokemon.EnemySpecialMove)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
