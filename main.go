@@ -37,14 +37,28 @@ func main() {
 		log.Printf("Enemy Pokemon: %+v\n", enemyPokemon)
 	}
 
+	Pokemon, err := getPlayerPokemonStatsByID(1)
+	if err != nil {
+		log.Fatalf("An error occurred: %v", err)
+	}
+	if Pokemon == nil {
+		log.Println("No enemy Pokemon found with the provided ID.")
+	} else {
+		log.Printf("Pokemon: %+v\n", Pokemon)
+	}
+
 	http.HandleFunc("/getPlayerID", getPlayerIDHandler)
 	http.HandleFunc("/login", loginHandler)
 	http.HandleFunc("/register", registerHandler)
 	http.HandleFunc("/securityAnswer", securityAnswerHandler)
 	http.HandleFunc("/checkSecurityAnswer", checkSecurityAnswerHandler)
 	http.HandleFunc("/resetPassword", resetPasswordHandler)
-	http.HandleFunc("/getPlayerPokemon", getPlayerPokemonByIDHandler)
 	http.HandleFunc("/getEnemyPokemon", getEnemyPokemonByIDHandler)
+	http.HandleFunc("/insertPlayerPokemon", insertPlayerPokemonHandler)
+	http.HandleFunc("/insertPokemonStats", insertPokemonStatsHandler)
+	http.HandleFunc("/updatePokemonStats", updatePokemonStatsHandler)
+	http.HandleFunc("/getPlayerPokemonStats", getPlayerPokemonStatsHandler)
+	http.HandleFunc("/getPlayerPokemonID", getPlayerPokemonIDHandler)
 
 	log.Fatal(http.ListenAndServe(":8080", nil))
 
@@ -317,19 +331,56 @@ func resetPassword(playerID int, newPassword string) (bool, error) {
 	return rowsAffected > 0, nil // If at least one row is affected, the password reset was successful.
 }
 
+func getPlayerPokemonID(playerID int) (int, error) {
+	var playerPokemonID int
+	err := db.QueryRow("SELECT playerPokemonID FROM playerpokemons WHERE playerID = ?", playerID).Scan(&playerPokemonID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return playerPokemonID, nil
+}
+
+func getPlayerPokemonIDHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerID, err := strconv.Atoi(r.URL.Query().Get("playerID"))
+	if err != nil {
+		http.Error(w, "Invalid player ID", http.StatusBadRequest)
+		return
+	}
+
+	playerPokemonID, err := getPlayerPokemonID(playerID)
+	if err != nil {
+		http.Error(w, "Could not retrieve player Pokemon ID", http.StatusInternalServerError)
+		return
+	}
+
+	if playerPokemonID == 0 {
+		http.Error(w, "No player Pokemon found for the provided player ID", http.StatusNotFound)
+		return
+	}
+
+	fmt.Fprint(w, playerPokemonID)
+}
+
 type Pokemon struct {
 	PlayerPokemonID   int    `json:"playerPokemonID"`
-	PlayerID          int    `json:"playerID"`
 	PlayerPokemonName string `json:"playerPokemonName"`
 	PlayerXP          int    `json:"playerXP"`
 	PlayerLevel       int    `json:"playerLevel"`
 	PlayerHP          int    `json:"playerHP"`
 }
 
-func getPlayerPokemonByID(playerPokemonID int) (*Pokemon, error) {
+func getPlayerPokemonStatsByID(playerPokemonID int) (*Pokemon, error) {
 	var pokemon Pokemon
-	err := db.QueryRow("SELECT pp.playerPokemonID, pp.playerID, pp.playerPokemonName, ps.playerXP, ps.playerLevel, ps.playerHP FROM playerpokemons pp INNER JOIN playerpokemonstats ps ON pp.playerPokemonID = ps.playerPokemonID WHERE pp.playerPokemonID = ?", playerPokemonID).
-		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerID, &pokemon.PlayerPokemonName, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP)
+	err := db.QueryRow("SELECT playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName FROM playerpokemonstats WHERE playerPokemonID = ?", playerPokemonID).
+		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP, &pokemon.PlayerPokemonName)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -339,31 +390,155 @@ func getPlayerPokemonByID(playerPokemonID int) (*Pokemon, error) {
 	return &pokemon, nil
 }
 
-func getPlayerPokemonByIDHandler(w http.ResponseWriter, r *http.Request) {
+func getPlayerPokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
 
-	pokemonID, err := strconv.Atoi(r.URL.Query().Get("id"))
+	playerPokemonID, err := strconv.Atoi(r.URL.Query().Get("id"))
 	if err != nil {
 		http.Error(w, "Invalid Player Pokemon ID", http.StatusBadRequest)
 		return
 	}
 
-	pokemon, err := getPlayerPokemonByID(pokemonID)
+	pokemon, err := getPlayerPokemonStatsByID(playerPokemonID)
 	if err != nil {
-		http.Error(w, "Could not retrieve Pokemon", http.StatusInternalServerError)
+		http.Error(w, "Could not retrieve Pokemon stats", http.StatusInternalServerError)
 		return
 	}
 
 	if pokemon == nil {
-		http.Error(w, "Cannot find Pokemon", http.StatusNotFound)
+		http.Error(w, "Cannot find Pokemon stats", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pokemon)
+}
+
+func insertPlayerPokemon(playerID int) (int, error) {
+	result, err := db.Exec("INSERT INTO playerpokemons (playerID) VALUES (?)", playerID)
+	if err != nil {
+		return 0, err
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return int(id), nil
+}
+
+func insertPlayerPokemonHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerID, err := strconv.Atoi(r.FormValue("playerID"))
+	if err != nil {
+		http.Error(w, "Invalid player ID", http.StatusBadRequest)
+		return
+	}
+
+	playerPokemonID, err := insertPlayerPokemon(playerID)
+	if err != nil {
+		http.Error(w, "Could not insert player Pokemon", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprint(w, playerPokemonID)
+}
+
+func insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, playerPokemonName string) error {
+	_, err := db.Exec("INSERT INTO playerpokemonstats (playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName) VALUES (?, ?, ?, ?, ?)", playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+	return err
+}
+
+func insertPokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerPokemonID, err := strconv.Atoi(r.FormValue("playerPokemonID"))
+	if err != nil {
+		http.Error(w, "Invalid player Pokemon ID", http.StatusBadRequest)
+		return
+	}
+
+	playerXP, err := strconv.Atoi(r.FormValue("playerXP"))
+	if err != nil {
+		http.Error(w, "Invalid player XP", http.StatusBadRequest)
+		return
+	}
+
+	playerLevel, err := strconv.Atoi(r.FormValue("playerLevel"))
+	if err != nil {
+		http.Error(w, "Invalid player level", http.StatusBadRequest)
+		return
+	}
+
+	playerHP, err := strconv.Atoi(r.FormValue("playerHP"))
+	if err != nil {
+		http.Error(w, "Invalid player HP", http.StatusBadRequest)
+		return
+	}
+
+	playerPokemonName := r.FormValue("playerPokemonName")
+
+	err = insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+	if err != nil {
+		http.Error(w, "Could not insert Pokemon stats", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprint(w, "Pokemon stats inserted successfully!")
+}
+
+func updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, playerPokemonName string) error {
+	_, err := db.Exec("UPDATE playerpokemonstats SET playerXP = ?, playerLevel = ?, playerHP = ?, playerPokemonName = ? WHERE playerPokemonID = ?", playerXP, playerLevel, playerHP, playerPokemonName, playerPokemonID)
+	return err
+}
+func updatePokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	playerPokemonID, err := strconv.Atoi(r.FormValue("playerPokemonID"))
+	if err != nil {
+		http.Error(w, "Invalid player Pokemon ID", http.StatusBadRequest)
+		return
+	}
+
+	playerXP, err := strconv.Atoi(r.FormValue("playerXP"))
+	if err != nil {
+		http.Error(w, "Invalid player XP", http.StatusBadRequest)
+		return
+	}
+
+	playerLevel, err := strconv.Atoi(r.FormValue("playerLevel"))
+	if err != nil {
+		http.Error(w, "Invalid player level", http.StatusBadRequest)
+		return
+	}
+
+	playerHP, err := strconv.Atoi(r.FormValue("playerHP"))
+	if err != nil {
+		http.Error(w, "Invalid player HP", http.StatusBadRequest)
+		return
+	}
+
+	playerPokemonName := r.FormValue("playerPokemonName")
+
+	err = updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+	if err != nil {
+		http.Error(w, "Could not update Pokemon stats", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Fprint(w, "Pokemon stats updated successfully!")
 }
 
 type EnemyPokemon struct {
@@ -376,7 +551,7 @@ type EnemyPokemon struct {
 
 func getEnemyPokemonByID(enemyPokemonID int) (*EnemyPokemon, error) {
 	var enemyPokemon EnemyPokemon
-	err := db.QueryRow("SELECT ep.enemyPokemonID, ep.enemyPokemonName, eps.enemyLevel, eps.enemyHp, eps.enemySpecialMove FROM enemypokemons ep INNER JOIN enemypokemonstats eps ON ep.enemyPokemonID = eps.enemyPokemonID WHERE ep.enemyPokemonID = ?", enemyPokemonID).
+	err := db.QueryRow("SELECT enemypokemons.enemyPokemonID, enemypokemons.enemyPokemonName, enemypokemonstats.enemyHp, enemypokemonstats.enemyLevel, enemypokemonstats.enemySpecialMove FROM enemypokemons, enemypokemonstats WHERE enemypokemons.enemyPokemonID = enemypokemonstats.enemyPokemonID AND enemypokemons.enemyPokemonID = ?", enemyPokemonID).
 		Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyLevel, &enemyPokemon.EnemyHp, &enemyPokemon.EnemySpecialMove)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
