@@ -66,7 +66,7 @@ func main() {
 
 func validateUserInput(playerName, password string) string {
 	if playerName == "" {
-		return "why you not put Username??!"
+		return "You need to input a username"
 	}
 
 	if len(playerName) < 3 || len(password) < 3 {
@@ -77,13 +77,22 @@ func validateUserInput(playerName, password string) string {
 
 func isValidUser(playerName, password string) (string, int, error) {
 	var id int
-	err := db.QueryRow("SELECT playerID FROM players WHERE playerName = ? AND playerPassword = ?", playerName, password).Scan(&id)
+	err := db.QueryRow("SELECT playerID FROM players WHERE playerName = ?", playerName).Scan(&id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "false", 0, nil
+			return "Username is incorrect", 0, nil
 		}
 		return "false", 0, err
 	}
+
+	err = db.QueryRow("SELECT playerID FROM players WHERE playerName = ? AND playerPassword = ?", playerName, password).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "Password is incorrect", 0, nil
+		}
+		return "false", 0, err
+	}
+
 	return "true", id, nil
 }
 
@@ -147,8 +156,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if valid == "false" {
-		fmt.Fprint(w, "Credentials are incorrect!")
+	if valid != "true" {
+		fmt.Fprint(w, valid)
 		return
 	}
 
@@ -189,7 +198,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	unique, err := isPlayerNameUnique(playerName)
 	if err != nil {
-		http.Error(w, "Could not check playerName uniqueness", http.StatusInternalServerError)
+		http.Error(w, "Could not check if player name is unique", http.StatusInternalServerError)
 		return
 	}
 
@@ -200,7 +209,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	success, err := insertPlayer(playerName, password)
 	if err != nil || !success {
-		http.Error(w, "Couldn't insert you into the database!", http.StatusInternalServerError)
+		http.Error(w, "Could not insert you into the database!", http.StatusInternalServerError)
 		return
 	}
 	fmt.Fprint(w, "true")
@@ -222,7 +231,7 @@ func securityAnswerHandler(w http.ResponseWriter, r *http.Request) {
 
 	err = insertSecurityAnswer(playerID, securityAnswer)
 	if err != nil {
-		http.Error(w, "Couldn't insert security answer into the database!", http.StatusInternalServerError)
+		http.Error(w, "Could not insert security answer into the database!", http.StatusInternalServerError)
 		return
 	}
 
@@ -243,7 +252,7 @@ func insertSecurityAnswer(playerID int, securityAnswer string) error {
 	if rowsAffected > 0 {
 		fmt.Println("Security answer stored successfully!")
 	} else {
-		fmt.Println("Couldn't insert you into the database!")
+		fmt.Println("Could not insert you into the database!")
 	}
 
 	return nil
@@ -310,7 +319,7 @@ func resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !success {
-		http.Error(w, "Couldn't reset password!", http.StatusNotFound)
+		http.Error(w, "Could not reset password!", http.StatusNotFound)
 		return
 	}
 
@@ -375,12 +384,13 @@ type Pokemon struct {
 	PlayerXP          int    `json:"playerXP"`
 	PlayerLevel       int    `json:"playerLevel"`
 	PlayerHP          int    `json:"playerHP"`
+	Evolution         int    `json:"evolution"`
 }
 
 func getPlayerPokemonStatsByID(playerPokemonID int) (*Pokemon, error) {
 	var pokemon Pokemon
-	err := db.QueryRow("SELECT playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName FROM playerpokemonstats WHERE playerPokemonID = ?", playerPokemonID).
-		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP, &pokemon.PlayerPokemonName)
+	err := db.QueryRow("SELECT playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName, evolution FROM playerpokemonstats WHERE playerPokemonID = ?", playerPokemonID).
+		Scan(&pokemon.PlayerPokemonID, &pokemon.PlayerXP, &pokemon.PlayerLevel, &pokemon.PlayerHP, &pokemon.PlayerPokemonName, &pokemon.Evolution)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -450,8 +460,8 @@ func insertPlayerPokemonHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, playerPokemonID)
 }
 
-func insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, playerPokemonName string) error {
-	_, err := db.Exec("INSERT INTO playerpokemonstats (playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName) VALUES (?, ?, ?, ?, ?)", playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+func insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, playerPokemonName string, evolution int) error {
+	_, err := db.Exec("INSERT INTO playerpokemonstats (playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName, evolution) VALUES (?, ?, ?, ?, ?, ?)", playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName, evolution)
 	return err
 }
 
@@ -484,10 +494,15 @@ func insertPokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid player HP", http.StatusBadRequest)
 		return
 	}
+	evolution, err := strconv.Atoi(r.FormValue("evolution"))
+	if err != nil {
+		http.Error(w, "Invalid evolution", http.StatusBadRequest)
+		return
+	}
 
 	playerPokemonName := r.FormValue("playerPokemonName")
 
-	err = insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+	err = insertPokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName, evolution)
 	if err != nil {
 		http.Error(w, "Could not insert Pokemon stats", http.StatusInternalServerError)
 		return
@@ -496,8 +511,8 @@ func insertPokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, "Pokemon stats inserted successfully!")
 }
 
-func updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, playerPokemonName string) error {
-	_, err := db.Exec("UPDATE playerpokemonstats SET playerXP = ?, playerLevel = ?, playerHP = ?, playerPokemonName = ? WHERE playerPokemonID = ?", playerXP, playerLevel, playerHP, playerPokemonName, playerPokemonID)
+func updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP int, evolution int, playerPokemonName string) error {
+	_, err := db.Exec("UPDATE playerpokemonstats SET playerXP = ?, playerLevel = ?, playerHP = ?, playerPokemonName = ?, evolution = ? WHERE playerPokemonID = ?", playerXP, playerLevel, playerHP, playerPokemonName, evolution, playerPokemonID)
 	return err
 }
 func updatePokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
@@ -529,10 +544,15 @@ func updatePokemonStatsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid player HP", http.StatusBadRequest)
 		return
 	}
+	evolution, err := strconv.Atoi(r.FormValue("evolution"))
+	if err != nil {
+		http.Error(w, "Invalid evolution", http.StatusBadRequest)
+		return
+	}
 
 	playerPokemonName := r.FormValue("playerPokemonName")
 
-	err = updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, playerPokemonName)
+	err = updatePokemonStats(playerPokemonID, playerXP, playerLevel, playerHP, evolution, playerPokemonName)
 	if err != nil {
 		http.Error(w, "Could not update Pokemon stats", http.StatusInternalServerError)
 		return
@@ -546,13 +566,12 @@ type EnemyPokemon struct {
 	EnemyPokemonName string `json:"enemyPokemonName"`
 	EnemyLevel       int    `json:"enemyLevel"`
 	EnemyHp          int    `json:"enemyHp"`
-	EnemySpecialMove string `json:"enemySpecialMove"`
 }
 
 func getEnemyPokemonByID(enemyPokemonID int) (*EnemyPokemon, error) {
 	var enemyPokemon EnemyPokemon
-	err := db.QueryRow("SELECT enemypokemons.enemyPokemonID, enemypokemons.enemyPokemonName, enemypokemonstats.enemyHp, enemypokemonstats.enemyLevel, enemypokemonstats.enemySpecialMove FROM enemypokemons, enemypokemonstats WHERE enemypokemons.enemyPokemonID = enemypokemonstats.enemyPokemonID AND enemypokemons.enemyPokemonID = ?", enemyPokemonID).
-		Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyLevel, &enemyPokemon.EnemyHp, &enemyPokemon.EnemySpecialMove)
+	err := db.QueryRow("SELECT enemypokemons.enemyPokemonID, enemypokemons.enemyPokemonName, enemypokemonstats.enemyHp, enemypokemonstats.enemyLevel FROM enemypokemons, enemypokemonstats WHERE enemypokemons.enemyPokemonID = enemypokemonstats.enemyPokemonID AND enemypokemons.enemyPokemonID = ?", enemyPokemonID).
+		Scan(&enemyPokemon.EnemyPokemonID, &enemyPokemon.EnemyPokemonName, &enemyPokemon.EnemyHp, &enemyPokemon.EnemyLevel)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
